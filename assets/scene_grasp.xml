@@ -1,0 +1,195 @@
+<mujoco model="kinova_gen3_robotiq grasp scene">
+  <!--
+    桌面抓取场景: 复用官方 Kinova Gen3 + Robotiq 2F-85 模型 (含地面/灯光/天空盒),
+    另外加一张工作台 + 3 个可抓取方块, 以及一个"夹持力增强"执行器。
+
+    夹爪开度 (fingers_actuator, ctrl[7], 0~255):
+      ctrl = 0   -> 全开 (两指间距约 98 mm)
+      ctrl = 255 -> 全闭 (两指间距约 15 mm)
+    实测依据见 tools/probe_model.py 输出。
+
+    grip_boost (ctrl[8], 0~1): 额外并联在 split 肌腱上的力执行器。
+    原模型的 fingers_actuator forcerange 只有 ±5N, 夹住方块后一抬就
+    被方块反推把手指顶开 (实测 driver 0.215 -> 0.130), 箱子掉下来。
+    这里并联一个 0~40N 的力 (对应真实 2F-85 约 20-40N 夹持力),
+    ctrl[8]=0 时完全不出力, 不影响原来的开合行为。
+  -->
+  <include file="kinova_gen3_robotiq/scene.xml"/>
+
+  <!-- meshdir 用**相对本文件**的路径: 内层 include 里的相对 meshdir 是以主文件目录解析的 -->
+  <compiler angle="radian" meshdir="kinova_gen3_robotiq/assets"/>
+
+  <actuator>
+    <general name="grip_boost" tendon="split" ctrlrange="0 1" gainprm="40 0 0"
+             biastype="none" forcerange="0 40"/>
+  </actuator>
+
+  <!-- ============================================================
+       修 厂商模型漏掉的"相邻连杆自碰撞"
+       ============================================================
+       现象: 原模型只给夹爪写了 exclude, 臂体相邻连杆没写。base_link 与
+       shoulder_link 的碰撞网格在关节界面处穿透 12mm, 接触摩擦把执行器的
+       105N·m 力矩 100% 吃掉 (qfrc_constraint[0] = -105.00), j1 被锁在
+       0.00845 rad/s 恒定爬行 —— 臂根本跟不动指令。
+       相邻连杆由关节直接相连, 真实结构上不会互撞 (碰撞网格是为了与环境/
+       非相邻杆碰撞用的), 所以按标准做法把相邻对全部 exclude。
+       ============================================================ -->
+  <contact>
+    <!-- 臂体 (world→...→bracelet) -->
+    <exclude body1="base_link" body2="shoulder_link"/>
+    <exclude body1="shoulder_link" body2="half_arm_1_link"/>
+    <exclude body1="half_arm_1_link" body2="half_arm_2_link"/>
+    <exclude body1="half_arm_2_link" body2="forearm_link"/>
+    <exclude body1="forearm_link" body2="spherical_wrist_1_link"/>
+    <exclude body1="spherical_wrist_1_link" body2="spherical_wrist_2_link"/>
+    <exclude body1="spherical_wrist_2_link" body2="bracelet_link"/>
+    <exclude body1="bracelet_link" body2="base_mount"/>
+    <exclude body1="base_mount" body2="base"/>
+    <!-- 夹爪: 厂商已排除 base↔driver / base↔spring_link / coupler↔follower,
+         这里补上其余相邻对与四连杆的交叉对 -->
+    <exclude body1="base" body2="left_driver"/>
+    <exclude body1="base" body2="right_driver"/>
+    <exclude body1="base" body2="left_spring_link"/>
+    <exclude body1="base" body2="right_spring_link"/>
+    <exclude body1="right_driver" body2="right_coupler"/>
+    <exclude body1="left_driver" body2="left_coupler"/>
+    <exclude body1="right_spring_link" body2="right_follower"/>
+    <exclude body1="left_spring_link" body2="left_follower"/>
+    <exclude body1="right_follower" body2="right_pad"/>
+    <exclude body1="left_follower" body2="left_pad"/>
+    <exclude body1="right_pad" body2="right_silicone_pad"/>
+    <exclude body1="left_pad" body2="left_silicone_pad"/>
+    <exclude body1="right_coupler" body2="right_follower"/>
+    <exclude body1="left_coupler" body2="left_follower"/>
+    <exclude body1="right_driver" body2="right_spring_link"/>
+    <exclude body1="left_driver" body2="left_spring_link"/>
+    <exclude body1="right_coupler" body2="right_spring_link"/>
+    <exclude body1="left_coupler" body2="left_spring_link"/>
+  </contact>
+
+  <worldbody>
+    <!-- ===== 全局相机 (VLA 数据采集用) =====
+         要求 (2026-10-09 第三次更新, 用户原话): "参考现有的VLA开源, 看看别人是怎么放的,
+         尽量让机械臂和桌子占画面上更多的面积"。
+
+         ── 调研结论 (2026-10-09) ──
+         · robosuite / LIBERO 的 agentview (仿真事实标准):
+             桌子 0.8×0.8 **正方形**; 相机 pos="0.5 0 1.35" 且四元数指向**桌面正中心**;
+             我解算过: 距桌心 0.74 m, **仰角 47.7°**, 正方形图 (84×84/256×256);
+             画面里桌子是**铺满甚至超出边缘**, 不是"完整框住"。
+         · DROID (真机, 76k 轨迹): 2 个外部 ZED2 **夹在桌子侧面朝工作区内看**,
+             位置刻意随机化; 另有腕部 ZED Mini。
+         · 两个数据集都是"腕部 + 第三人称"的组合。
+
+         ── 据此定的位姿 ──
+         位姿: pos = (-0.0005, 0.5305, 1.0445), **朝向对准 4 个方块的几何中心**
+               (0.53, 0, 0.24); 俯角 **47°** (对齐 agentview 的 47.7°),
+               距目标 1.10 m, 方位角 45° (从 -x 轴往 +y 偏 = 左后方), fovy 55°。
+
+         ⚠ 这里有个**方法论教训**: 我一开始直接用"最大化(臂∪桌∪方块)占画面比例"去网格搜,
+           优化器一路跑到 方位角25°/俯角60°/距离0.65m —— 那成了**无人机俯拍**,
+           既不是用户要的"左后方", 也不是 agentview 的形态。渲染出来一看就不对。
+           **定性要求不该用标量目标去最优化**; 正确做法是先把要求翻成参考区间
+           (方位 40~55°、俯角 42~52°), 在区间内枚举候选、出图肉眼挑。
+
+         实测 (多姿态取最坏: home + 前伸; 分割渲染量真实像素):
+             机械臂四边余量 >= 17 px  → 完整在画面内
+             4 个方块余量  >= 120 px  → 全部清楚可见
+             (机械臂 ∪ 桌面 ∪ 方块) 占画面 **50%**  ← 上一版只有 30% 左右
+
+         ⚠ 改这个相机前必看 (坑都踩过):
+         1 MuJoCo 相机**默认朝下看** (光轴 = -z 轴); 绕 z 转只是滚转、不改朝向。
+         2 用 euler=(0, 俯角-90, 0) 光轴对, 但**把画面滚转 90°**。要用 look-at 构造。
+         3 别用"几何体包围球投影"估余量 —— 会算错; 用分割渲染取真实像素。
+         4 ★ 用分割渲染**必须先 `r.enable_segmentation_rendering()`** ——
+           忘了调它, `render()[:,:,0]` 拿到的是**红色通道**不是 geom id, 数字全是垃圾。
+         5 地板 reflectance=0.2 会把机械臂镜像在下方, 别把倒影当成出画。
+
+         工具: tools/design_cam_v3b.py (区间内枚举 + 出图) / design_cam_v3c.py (微调) /
+               design_cam_v3.py (纯最大化, **会跑向极端, 只作反面参考**)
+    -->
+    <camera name="cam_scene" mode="fixed"
+            pos="-0.000470 0.530470 1.044489"
+            quat="0.35605539 0.14025395 -0.33860298 -0.85959375"
+            fovy="55" resolution="640 480"/>
+
+    <!-- ===== 工作台 (台面 z=0.22, 四条细腿避让机械臂) =====
+         位置: 桌面中心 x=0.54 是"目标物所在处"的标定值, 不要改 —— 桌面越远,
+         "夹爪朝下 + 抬高"时 joint_4 越接近限位。实测 (tools/sweep_table_pos.py):
+            目标物/桌面中心 x=0.60 → 最坏余量  5.2°  (抬升时顶死, 用户实测"限位帧 501")
+            目标物/桌面中心 x=0.54 → 最坏余量 ~15°   ← 现在
+            目标物/桌面中心 x=0.50 → 最坏余量 21.7°
+         没有再往近处挪, 因为判据还包括"夹爪水平朝前(VR 起始姿势/回归脚本)也能到达":
+            水平姿势在 x>=0.54 全部可达(残差 0.0mm), x=0.52 起最靠内的方块就够不到(18mm)。
+
+         尺寸沿革:
+           最初 0.52x0.60  →  2026-10-09 放大到 0.60x0.68 ("桌子搞大一点点")
+           →  2026-10-09 再放大到 **1.10x0.80 m** ("和机械臂比例差太多, 不够接近现实")
+         这次是**改尺寸 + 挪中心**, 不再"中心不动"了 —— 因为要把它做成一张像样的
+         实验台, 近边必须从基座旁边开始 (x=0.16), 桌面向外延伸到 x=1.26。
+
+         ★ 目标物 (3 个方块) 的位置**一个都没动** (x=0.50~0.56, y=-0.10~0.14)
+           → 上面那套"目标物在 0.54 处"的可达性/限位标定**全部继续有效**。
+           变的只是"台面铺多大", 不参与任何控制/接触判据。
+
+         尺寸依据 (真实比例): Kinova Gen3 标称工作半径 0.902 m; 之前 0.60x0.68 的台面
+         只有臂伸展的 1.15 倍, 看起来像个小凳子。现取 1.10x0.80 m —— 与真实实验台
+         (常见 1200x600 / 1500x750 mm) 同量级, 台面明显大于臂的工作范围。
+         对照渲染见 tools/design_table_size.py (A/B/C/D 四档同视角):
+             A 0.60x0.68 (原)  B 0.90x0.80  C 1.10x0.80 (选)  D 1.20x0.90
+
+         近边 x=0.16: 臂基座 base_link 包围球到 x≈0.111 → 余量 +0.049 m, 不撞。
+         (已用 tools/ab_table_size_contacts.py 跑完整抓取轨迹 A/B 验证: 桌↔臂连杆
+          接触数与"近边 0.24 的旧桌子"逐位相同 → 放大没有引入任何新接触。) -->
+    <body name="table" pos="0.71 0 0">
+      <geom name="table_top" type="box" size="0.55 0.55 0.0125" pos="0 0 0.2075"
+            rgba="0.55 0.42 0.30 1" friction="1.0 0.01 0.001"/>
+      <geom name="table_leg1" type="box" size="0.018 0.018 0.0975" pos="-0.505  0.505 0.0975"
+            rgba="0.35 0.27 0.20 1"/>
+      <geom name="table_leg2" type="box" size="0.018 0.018 0.0975" pos=" 0.505  0.505 0.0975"
+            rgba="0.35 0.27 0.20 1"/>
+      <geom name="table_leg3" type="box" size="0.018 0.018 0.0975" pos="-0.505 -0.505 0.0975"
+            rgba="0.35 0.27 0.20 1"/>
+      <geom name="table_leg4" type="box" size="0.018 0.018 0.0975" pos=" 0.505 -0.505 0.0975"
+            rgba="0.35 0.27 0.20 1"/>
+    </body>
+
+    <!-- ===== 可抓取方块 (4x4x4 cm, 约 32 g) =====
+         尺寸依据四-2 标定: 两指垫组高约 ±18mm, 物体高过约 40mm 夹爪掌部会压到顶面,
+         接触力会爆炸 (实测方块被弹到 11m 外)
+
+         摆位 (2026-10-09 新增 obj4 + "再分散一些"):
+           原先 3 个挤在 x 0.50~0.56 / y -0.10~0.14 (散布 0.06 x 0.24 m)。
+           现在 4 个铺成一大片: x 0.38~0.50 / y -0.36~+0.36 (散布 0.12 x 0.72 m)
+           —— x 方向 2 倍、y 方向 3 倍。
+           ★ 上限受 e2e 接近路线限制: x>=0.56 的位置**单独测能过、整轮跑就 30mm 不到位**
+             (对初始状态敏感, 不稳) → 只用 x<=0.50 的稳点。
+
+         位置怎么定的 (**关键教训: 端点可达 ≠ 整条接近轨迹可达**):
+           先用"夹爪朝下"扫可达区 → 得到 x<=0.68 的大区域; 但 e2e 的接近路线是
+           "抬到 z=0.45 → 平移到正上方 → 竖直下探", **z=0.45 那个高点**才是瓶颈:
+           把方块放在 (0.62,±0.30) 时 e2e 不到位 (残差 34mm)。
+           → 最后是**直接用真实的 validate_e2e.run_pick 逐个位置试**,
+             只挑 4/4 都能完成的点。工具: tools/sweep_layout_by_e2e.py -->
+    <body name="obj1" pos="0.38 -0.36 0.240">
+      <freejoint name="obj1_free"/>
+      <geom name="obj1_geom" type="box" size="0.020 0.020 0.020"
+            rgba="0.85 0.25 0.20 1" density="500" friction="1.2 0.02 0.001"/>
+    </body>
+    <body name="obj2" pos="0.38 0.36 0.240">
+      <freejoint name="obj2_free"/>
+      <geom name="obj2_geom" type="box" size="0.020 0.020 0.020"
+            rgba="0.95 0.70 0.20 1" density="500" friction="1.2 0.02 0.001"/>
+    </body>
+    <body name="obj3" pos="0.50 -0.30 0.240">
+      <freejoint name="obj3_free"/>
+      <geom name="obj3_geom" type="box" size="0.020 0.020 0.020"
+            rgba="0.25 0.55 0.90 1" density="500" friction="1.2 0.02 0.001"/>
+    </body>
+    <body name="obj4" pos="0.44 0.30 0.240">
+      <freejoint name="obj4_free"/>
+      <geom name="obj4_geom" type="box" size="0.020 0.020 0.020"
+            rgba="0.35 0.75 0.35 1" density="500" friction="1.2 0.02 0.001"/>
+    </body>
+  </worldbody>
+</mujoco>

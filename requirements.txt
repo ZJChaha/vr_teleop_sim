@@ -1,0 +1,15 @@
+# VR 遥操作 + MuJoCo 仿真 + LeRobot 数据采集
+#
+# 安装:
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# 注: MuJoCo 需要 OpenGL 3.3+；Linux 桌面（X11）即可，无需 CUDA。
+
+mujoco>=3.1,<4
+numpy>=1.24
+aiohttp>=3.9
+pillow>=10.0
+
+# 数据集自检/导出时需要（采集本身不依赖）
+pyarrow>=14.0

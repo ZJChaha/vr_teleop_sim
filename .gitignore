@@ -1,0 +1,22 @@
+# ---- 运行产物 ----
+logs/
+data/
+.cert_backup/
+*.log
+
+# ---- 证书/密钥（每人本地生成，绝不入库）----
+cert.pem
+key.pem
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---- 编辑器/系统 ----
+.idea/
+.vscode/
+.DS_Store
+MUJOCO_LOG.TXT

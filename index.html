@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VR 遥操作 - Kinova Gen3 + 夹爪</title>
+<style>
+  body { font-family: sans-serif; background:#111; color:#eee; margin:0; padding:24px; }
+  h1 { font-size:20px; }
+  button { font-size:18px; padding:14px 28px; margin:8px 0; cursor:pointer; }
+  #status { font-family:monospace; font-size:15px; margin-top:16px; white-space:pre-wrap; line-height:1.5; }
+  .ok { color:#7f7; } .err { color:#f77; } .warn { color:#fa0; }
+  #pad { font-family:monospace; font-size:13px; color:#8ab; margin-top:12px; white-space:pre-wrap; }
+  canvas { display:none; }
+</style>
+</head>
+<body>
+<h1>VR 遥操作 - Kinova Gen3 + Robotiq 2F-85 (单手)</h1>
+<button id="enter">进入 VR</button>
+<button id="exit" disabled>退出 VR</button>
+<div id="status">正在检测 WebXR 支持...</div>
+<div id="pad"></div>
+<canvas id="glcanvas"></canvas>
+
+<script>
+const statusEl = document.getElementById('status');
+const padEl = document.getElementById('pad');
+const canvas = document.getElementById('glcanvas');
+let gl = null;
+let ws = null, wsReady = false;
+let xrSession = null, xrRefSpace = null;
+let prevBState = false;   // A/B 上一帧状态
+const prevSqueeze = { left: 0, right: 0 };  // 各手侧键上一帧值（锁定上升沿 → 重新校准）
+let calibRight = null, calibForward = null, calibMat = null;
+let lastPad = '';
+// ★ 调试文本刷新节流：原来每帧（且在**每个 view**里）都拼一遍 20 个 toFixed 的字符串，
+//   只为更新一个角落里的调试元素。现在每 12 帧才拼一次（≈6Hz，肉眼够用）。
+let dbgTick = 0;
+
+function setStatus(t, c='') { statusEl.innerHTML = t; statusEl.className = c; }
+
+// ---------- WebSocket ----------
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  ws = new WebSocket(proto + location.host + '/ws');
+  ws.onopen = () => { wsReady = true; refreshStatus(); };
+  ws.onerror = () => { wsReady = false; };
+  ws.onclose = () => { wsReady = false; setTimeout(connectWS, 3000); };
+}
+
+async function detectXR() {
+  if (!('xr' in navigator)) return '浏览器不支持 WebXR';
+  try {
+    const s = await navigator.xr.isSessionSupported('immersive-vr');
+    return s ? '支持 immersive-vr' : '不支持 immersive-vr';
+  } catch (e) { return '检查失败: ' + e.message; }
+}
+
+async function refreshStatus() {
+  const xrInfo = await detectXR();
+  const wsInfo = wsReady ? '已连接' : '未连接(重试中)';
+  setStatus('页面版本: gripper-v1 (单手: 侧键跟随 + 扳机夹爪)\n' +
+            'WebXR: ' + xrInfo + '\nWebSocket: ' + wsInfo +
+            '\n\n点"进入 VR"开始遥操作\n' +
+            '  按住侧键(grip) = 锁定跟随(同时校准前后左右)  , 松开 = 冻结\n' +
+            '  扳机(trigger)   = 夹爪开合: 松开全开 → 扣到底闭合\n' +
+            '  （双臂配置下: 左手柄控左臂、右手柄控右臂，各自独立）\n' +
+            '  A 或 B 键       = 机械臂回任务初始位 + 夹爪张开 + 方块归位\n' +
+            '  夹住物体: 把夹爪放到方块上 → 扣扳机到底\n' +
+            '\n【左手柄 · 数据集采集】\n' +
+            '  扳机(trigger) = 切片(结束这一轮)\n' +
+            '  X = 标为成功    Y = 标为失败\n' +
+            '  打完标签后按右手侧键 → 自动开始下一轮',
+            wsReady ? 'ok' : 'warn');
+}
+
+// ---------- WebGL ----------
+function initGL() {
+  gl = canvas.getContext('webgl', { xrCompatible: true }) ||
+       canvas.getContext('webgl2', { xrCompatible: true });
+  if (!gl) return false;
+  gl.clearColor(0.05, 0.06, 0.08, 1.0);
+  gl.enable(gl.DEPTH_TEST);
+  return true;
+}
+
+function buildProgram(vsSrc, fsSrc) {
+  function sh(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    return s;
+  }
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fsSrc));
+  gl.linkProgram(p);
+  return p;
+}
+
+const VS = `
+attribute vec3 aPos;
+uniform mat4 uMVP;
+void main() { gl_Position = uMVP * vec4(aPos, 1.0); }`;
+
+const FS = `
+precision mediump float;
+uniform vec3 uColor;
+void main() { gl_FragColor = vec4(uColor, 1.0); }`;
+
+let prog, cubeVerts, cubeVBO, aPosLoc, mvpLoc, colorLoc;
+
+function initScene() {
+  prog = buildProgram(VS, FS);
+  aPosLoc = gl.getAttribLocation(prog, 'aPos');
+  mvpLoc = gl.getUniformLocation(prog, 'uMVP');
+  colorLoc = gl.getUniformLocation(prog, 'uColor');
+  const c = 0.02;
+  const q = [
+    [[-c,-c,-c],[-c, c,-c],[-c, c, c],[-c,-c, c]],
+    [[ c,-c, c],[ c, c, c],[ c, c,-c],[ c,-c,-c]],
+    [[-c,-c, c],[-c, c, c],[ c, c, c],[ c,-c, c]],
+    [[ c,-c,-c],[ c, c,-c],[-c, c,-c],[-c,-c,-c]],
+    [[-c, c,-c],[-c, c, c],[ c, c, c],[ c, c,-c]],
+    [[-c,-c,-c],[ c,-c,-c],[ c,-c, c],[-c,-c, c]],
+  ];
+  const tris = [];
+  for (const [a,b,c_,d] of q) tris.push(...a,...b,...c_, ...a,...c_,...d);
+  cubeVerts = new Float32Array(tris);
+  // ★ 顶点缓冲建一次就够。原来是每帧 drawCubeRaw 里 createBuffer/bufferData/deleteBuffer，
+  //   而这段又在**每个 view**（立体＝2 个）里跑 ⇒ 每秒白白几百次 GPU 缓冲增删。
+  cubeVBO = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, cubeVBO);
+  gl.bufferData(gl.ARRAY_BUFFER, cubeVerts, gl.STATIC_DRAW);
+}
+
+function mat4mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c=0;c<4;c++) for (let r=0;r<4;r++) {
+    o[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1] + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
+  }
+  return o;
+}
+
+// ★ 每帧都会用到的两个矩阵缓冲：提到模块级复用，别再每帧 new Float32Array。
+//   （原来是 mat4mul(new Float32Array(view.projectionMatrix), model)：一帧两个 16-float 分配）
+const _mvpProj = new Float32Array(16);
+const _mvpOut = new Float32Array(16);
+function mat4mulTo(a, b, o) {
+  for (let c=0;c<4;c++) for (let r=0;r<4;r++) {
+    o[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1] + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
+  }
+  return o;
+}
+
+// ---------- WebXR 数学工具 ----------
+function vecToArray(v){return [v.x,v.y,v.z];}
+function quatToArray(q){return [q.x,q.y,q.z,q.w];}
+
+function mat3FromXR(m) { return [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]]; }
+function mat3TransposeMult(A, B) {
+  const o = new Array(9).fill(0);
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++) {
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += A[k*3+i] * B[k*3+j];
+      o[i*3+j] = s;
+    }
+  return o;
+}
+function mat3ToQuat(R) {
+  const tr = R[0] + R[4] + R[8];
+  let x, y, z, w;
+  if (tr > 0) {
+    const S = Math.sqrt(tr + 1) * 2;
+    w = 0.25 * S;
+    x = (R[7] - R[5]) / S; y = (R[2] - R[6]) / S; z = (R[3] - R[1]) / S;
+  } else if (R[0] > R[4] && R[0] > R[8]) {
+    const S = Math.sqrt(1 + R[0] - R[4] - R[8]) * 2;
+    w = (R[7] - R[5]) / S; x = 0.25 * S; y = (R[1] + R[3]) / S; z = (R[2] + R[6]) / S;
+  } else if (R[4] > R[8]) {
+    const S = Math.sqrt(1 + R[4] - R[0] - R[8]) * 2;
+    w = (R[2] - R[6]) / S; x = (R[1] + R[3]) / S; y = 0.25 * S; z = (R[5] + R[7]) / S;
+  } else {
+    const S = Math.sqrt(1 + R[8] - R[0] - R[4]) * 2;
+    w = (R[3] - R[1]) / S; x = (R[2] + R[6]) / S; y = (R[5] + R[7]) / S; z = 0.25 * S;
+  }
+  return [x, y, z, w];
+}
+// 校准系 = x右(headRight) y上 z后(-headFwd)
+function buildCalibMat(headFwd, headRight) {
+  return [headRight[0], 0, -headFwd[0],
+          0, 1, 0,
+          headRight[1], 0, -headFwd[1]];
+}
+
+async function enterVR() {
+  if (!('xr' in navigator)) { setStatus('此浏览器不支持 WebXR', 'err'); return; }
+  let supported = false;
+  try { supported = await navigator.xr.isSessionSupported('immersive-vr'); }
+  catch (e) { setStatus('检查失败: ' + e.message, 'err'); return; }
+  if (!supported) { setStatus('不支持 immersive-vr 会话', 'err'); return; }
+
+  setStatus('正在进入 VR...', 'warn');
+  document.getElementById('enter').disabled = true;
+  if (!gl) { if (!initGL()) { setStatus('WebGL 初始化失败', 'err'); return; } }
+
+  let timeoutId;
+  try {
+    const timeout = new Promise((_, rej) => {
+      timeoutId = setTimeout(() => rej(new Error('进入 VR 超时 (20s)')), 20000);
+    });
+    if (gl.makeXRCompatible) { try { await gl.makeXRCompatible(); } catch (e) {} }
+    xrSession = await Promise.race([navigator.xr.requestSession('immersive-vr'), timeout]);
+    clearTimeout(timeoutId);
+  } catch (err) {
+    clearTimeout(timeoutId);
+    document.getElementById('enter').disabled = false;
+    setStatus('进入 VR 失败: ' + err.message + '\n\n提示: 确认头显已佩戴、Guardian 边界已设置', 'err');
+    return;
+  }
+
+  xrSession.addEventListener('end', onSessionEnd);
+
+  for (const t of ['local', 'local-floor', 'viewer']) {
+    try { xrRefSpace = await xrSession.requestReferenceSpace(t); break; }
+    catch (e) { xrRefSpace = null; }
+  }
+  if (!xrRefSpace) { setStatus('无法获取 reference space', 'err'); xrSession.end(); return; }
+
+  try {
+    const layer = new XRWebGLLayer(xrSession, gl);
+    await xrSession.updateRenderState({ baseLayer: layer });
+  } catch (e) {
+    setStatus('创建渲染层失败: ' + e.message, 'err');
+    xrSession.end(); return;
+  }
+
+  initScene();
+  document.getElementById('exit').disabled = false;
+  setStatus('VR 已启动\n按住侧键=跟随(会校准朝向), 松开=冻结, 扳机=夹爪, A/B=回位', 'ok');
+  xrSession.requestAnimationFrame(onXRFrame);
+}
+
+function onSessionEnd() {
+  xrSession = null;
+  document.getElementById('enter').disabled = false;
+  document.getElementById('exit').disabled = true;
+  setStatus('VR 会话已结束', 'warn');
+}
+
+function onXRFrame(t, frame) {
+  if (!xrSession) return;
+  const session = frame.session;
+  session.requestAnimationFrame(onXRFrame);
+  dbgTick++;                       // 调试文本节流用（见 padInfo 那段）
+
+  const pose = frame.getViewerPose(xrRefSpace);
+  if (!pose) return;
+
+  const m = pose.transform.matrix;
+  const fwx = -m[8], fwz = -m[10];
+  const fh = Math.hypot(fwx, fwz) || 1.0;
+  const headFwd = [fwx / fh, fwz / fh];
+  const headRight = [-fwz / fh, fwx / fh];
+
+  if (!calibMat) calibMat = buildCalibMat(headFwd, headRight);
+
+  const layer = session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  const poseMsg = {};
+  let bPressed = false;
+  let padInfo = '';
+
+  for (const view of pose.views) {
+    const vp = layer.getViewport(view);
+    gl.viewport(vp.x, vp.y, vp.width, vp.height);
+    const viewMatrix = view.transform.inverse.matrix;
+
+    for (const source of session.inputSources) {
+      if (!source.gripSpace) continue;
+      const gp = frame.getPose(source.gripSpace, xrRefSpace);
+      if (!gp) continue;
+      const hand = source.handedness;
+      if (!hand) continue;
+
+      let trigger = 0, squeeze = 0, btnX = false, btnY = false;
+      if (source.gamepad) {
+        const btns = source.gamepad.buttons;
+        if (btns[0]) trigger = btns[0].value;
+        if (btns[1]) squeeze = btns[1].value;
+        if (hand === 'left') {
+          // 左手柄: X(4) / Y(5) → 数采打标签 (X=成功, Y=失败); 扳机 → 切片
+          const b4 = btns[4], b5 = btns[5];
+          btnX = !!(b4 && b4.pressed);
+          btnY = !!(b5 && b5.pressed);
+        }
+        if (hand === 'right') {
+          // A(4) / B(5) 键 → 回位 (不同浏览器映射略有差异, 两个都收)
+          const b4 = btns[4], b5 = btns[5];
+          if ((b4 && b4.pressed) || (b5 && b5.pressed)) bPressed = true;
+          // ★ 调试串只在每 12 帧拼一次（原来每帧 × 每 view 都拼，纯浪费 CPU/GC）
+          if (dbgTick % 12 === 0) {
+            const ax = source.gamepad.axes || [];
+            padInfo = `右手柄 buttons: ` +
+              Array.from(btns).map((b, i) => `${i}:${b.pressed ? 1 : 0}/${b.value.toFixed(2)}`).join(' ') +
+              `\n  axes: ` + Array.from(ax).map(v => v.toFixed(2)).join(' ') +
+              `\n  trigger=${trigger.toFixed(2)} squeeze=${squeeze.toFixed(2)}`;
+          }
+        }
+      }
+
+      // 任一只手按住侧键的上升沿 → 用头显朝向重新校准参考系。
+      // （双臂时两只手都会驱动机械臂，所以不能只认右手）
+      if (squeeze > 0.5 && prevSqueeze[hand] <= 0.5) {
+        calibForward = headFwd;
+        calibRight = headRight;
+        calibMat = buildCalibMat(headFwd, headRight);
+      }
+
+      const rawP = gp.transform.position;
+      let pos;
+      if (calibForward && calibRight) {
+        const pr = rawP.x * calibRight[0] + rawP.z * calibRight[1];
+        const pf = rawP.x * calibForward[0] + rawP.z * calibForward[1];
+        pos = [pr, rawP.y, -pf];
+      } else {
+        pos = vecToArray(rawP);
+      }
+      let quatOut;
+      if (calibMat) {
+        const Rg = mat3FromXR(gp.transform.matrix);
+        quatOut = mat3ToQuat(mat3TransposeMult(calibMat, Rg));
+      } else {
+        quatOut = quatToArray(gp.transform.orientation);
+      }
+
+      // 两只手都带上位姿 —— 服务端按 robot_profile.teleop.drive_hand 决定用哪只手驱动
+      if (hand === 'right') {
+        poseMsg.right = { pos, quat: quatOut, trigger, squeeze };
+      } else if (hand === 'left') {
+        // 左手默认只用于数采：扳机=切片, X=成功, Y=失败（服务端做边沿检测）
+        // 如果 profile 里把 drive_hand 改成 "left"，这只手就变成驱动手
+        poseMsg.left = { pos, quat: quatOut, trigger, squeeze, x: btnX, y: btnY };
+      }
+
+      // 渲染: 右手方块 (跟随侧键=亮, 扳机越大越偏绿=夹爪闭合)
+      const model = mat4mul(viewMatrix, gp.transform.matrix);
+      const following = squeeze > 0.5;
+      const g = 0.2 + 0.8 * trigger;
+      const color = hand === 'right'
+        ? (following ? [1.0, g, g * 0.5] : [0.55, 0.15 + 0.4 * trigger, 0.15])
+        : [0.2, 0.3, 1.0];
+      _mvpProj.set(view.projectionMatrix);          // ★ 复用缓冲，不再每帧 new Float32Array
+      const mvp = mat4mulTo(_mvpProj, model, _mvpOut);
+      drawCubeRaw(mvp, color);
+
+      prevSqueeze[hand] = squeeze;
+    }
+  }
+
+  if (padInfo && padInfo !== lastPad) { lastPad = padInfo; padEl.textContent = padInfo; }
+
+  if (bPressed && !prevBState && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ reset: true }));
+  }
+  prevBState = bPressed;
+
+  if (ws && ws.readyState === WebSocket.OPEN && Object.keys(poseMsg).length > 0) {
+    ws.send(JSON.stringify(poseMsg));
+  }
+}
+
+function drawCubeRaw(mvp, color) {
+  gl.useProgram(prog);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cubeVBO);
+  gl.enableVertexAttribArray(aPosLoc);
+  gl.vertexAttribPointer(aPosLoc, 3, gl.FLOAT, false, 0, 0);
+  gl.uniformMatrix4fv(mvpLoc, false, mvp);
+  gl.uniform3fv(colorLoc, color);
+  gl.drawArrays(gl.TRIANGLES, 0, 36);
+}
+
+document.getElementById('enter').addEventListener('click', enterVR);
+document.getElementById('exit').addEventListener('click', () => { if (xrSession) xrSession.end(); });
+
+initGL();
+connectWS();
+refreshStatus();
+</script>
+</body>
+</html>
