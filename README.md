@@ -91,15 +91,13 @@ teleop=TeleopSpec(drive_hand="right", follow_orientation=True, scale=1.0,
 
 ## 演示视频
 
-| | 内容 | 时长 |
-|---|---|---|
-| [遥操简单示范.mp4](video/遥操简单示范.mp4) | 戴头显用手柄直接控制机械臂，侧视/腕部/俯视三个窗口同步 | 12 s |
-| [数采场景应用.mp4](video/数采场景应用.mp4) | 抓取-搬运-放置，同时按 50 Hz 录制 LeRobot 数据集 | 21 s |
 
-```bash
-# 不想在网页里看就本地播
-mpv video/遥操简单示范.mp4
-```
+
+https://github.com/user-attachments/assets/4f0b09ab-f956-491e-9ccc-92306111278a
+https://github.com/user-attachments/assets/890ab8c6-44df-44aa-b72f-ba4261faee88
+
+
+
 
 ---
 
