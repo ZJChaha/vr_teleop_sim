@@ -89,6 +89,20 @@ teleop=TeleopSpec(drive_hand="right", follow_orientation=True, scale=1.0,
 
 ---
 
+## 演示视频
+
+| | 内容 | 时长 |
+|---|---|---|
+| [遥操简单示范.mp4](video/遥操简单示范.mp4) | 戴头显用手柄直接控制机械臂，侧视/腕部/俯视三个窗口同步 | 12 s |
+| [数采场景应用.mp4](video/数采场景应用.mp4) | 抓取-搬运-放置，同时按 50 Hz 录制 LeRobot 数据集 | 21 s |
+
+```bash
+# 不想在网页里看就本地播
+mpv video/遥操简单示范.mp4
+```
+
+---
+
 ## 数据集
 
 ```
@@ -119,6 +133,7 @@ camview.py              相机预览窗口（独立线程 / 独立 GL 上下文�
 dataset_recorder.py     LeRobot v2.1 写入器
 runlog.py / glutil.py   运行日志 / GL 上下文串行化
 assets/                 参考场景 + Kinova Gen3 模型
+video/                  演示视频（H.264）
 tools/                  check_profile / list_model / validate_e2e / validate_dual
 docs/                   01 上手 · 02 架构 · 03 接入自己的臂 · 04 相机
                         05 数采 · 06 排障 · 07 AI agent 交接 · 08 双臂
