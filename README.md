@@ -89,17 +89,6 @@ teleop=TeleopSpec(drive_hand="right", follow_orientation=True, scale=1.0,
 
 ---
 
-## 演示视频
-
-
-
-https://github.com/user-attachments/assets/4f0b09ab-f956-491e-9ccc-92306111278a
-https://github.com/user-attachments/assets/890ab8c6-44df-44aa-b72f-ba4261faee88
-
-
-
-
----
 
 ## 数据集
 
