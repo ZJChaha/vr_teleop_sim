@@ -9,6 +9,17 @@
 
 ---
 
+## 演示视频
+
+[![openpi π0 模型微调测试（仿真）](video/bilibili_cover.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
+
+点封面跳转 B 站：P1 π0 闭环推理（32 s）· P2 数采（21 s）。
+
+> GitHub 的 README 不支持内嵌播放器（`<iframe>` 会被过滤掉），所以用
+> "封面图 + 跳转"的方式。
+
+---
+
 ## 快速开始
 
 ```bash
@@ -86,17 +97,6 @@ VR_TELEOP_PROFILE=robot_profile_myarm ./run.sh
 teleop=TeleopSpec(drive_hand="right", follow_orientation=True, scale=1.0,
                   axis_signs=(-1, -1, 1))
 ```
-
----
-
-## 演示视频
-
-[![openpi π0 模型微调测试（仿真）](video/bilibili_cover.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
-
-点封面跳转 B 站：P1 π0 闭环推理（32 s）· P2 数采（21 s）。
-
-> GitHub 的 README 不支持内嵌播放器（`<iframe>` 会被过滤掉），所以用
-> "封面图 + 跳转"的方式。
 
 ---
 
