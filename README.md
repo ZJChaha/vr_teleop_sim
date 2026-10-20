@@ -89,6 +89,16 @@ teleop=TeleopSpec(drive_hand="right", follow_orientation=True, scale=1.0,
 
 ---
 
+## 演示视频
+
+[![openpi π0 模型微调测试（仿真）](video/bilibili_cover.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
+
+点封面跳转 B 站：P1 π0 闭环推理（32 s）· P2 数采（21 s）。
+
+> GitHub 的 README 不支持内嵌播放器（`<iframe>` 会被过滤掉），所以用
+> "封面图 + 跳转"的方式。
+
+---
 
 ## 数据集
 
@@ -120,7 +130,7 @@ camview.py              相机预览窗口（独立线程 / 独立 GL 上下文�
 dataset_recorder.py     LeRobot v2.1 写入器
 runlog.py / glutil.py   运行日志 / GL 上下文串行化
 assets/                 参考场景 + Kinova Gen3 模型
-video/                  演示视频（H.264）
+video/                  演示视频（H.264）+ B 站封面
 tools/                  check_profile / list_model / validate_e2e / validate_dual
 docs/                   01 上手 · 02 架构 · 03 接入自己的臂 · 04 相机
                         05 数采 · 06 排障 · 07 AI agent 交接 · 08 双臂
