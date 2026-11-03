@@ -13,11 +13,11 @@
 
 ### 真机实验
 
-[![真机实验演示](video/bilibili_cover_real_play.jpg)](https://www.bilibili.com/video/BV1PvxF66E8r)
+[![真机实验演示](video/bilibili_cover_real.jpg)](https://www.bilibili.com/video/BV1PvxF66E8r)
 
 ### 仿真
 
-[![仿真演示](video/bilibili_cover_play.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
+[![仿真演示](video/bilibili_cover.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
 
 ---
 
