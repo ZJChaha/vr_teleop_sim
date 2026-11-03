@@ -13,22 +13,11 @@
 
 ### 真机实验
 
-[![openpi π0 模型微调测试（真机实验）](video/bilibili_cover_real.jpg)](https://www.bilibili.com/video/BV1PvxF66E8r)
-
-点封面跳转 B 站（46 s）：用这套流程采集的数据微调 π0，**在真机上闭环推理** ——
-抓取桌面上的彩色方块。真实光照、线缆和桌面的磨损痕迹，和下面的仿真 demo 是同一套任务。
-
-> 本仓库只包含仿真侧代码。真机那一段用的是这里产出的 LeRobot 数据集，
-> 驱动与真机推理服务不在本仓库内。
+[![真机实验演示](video/bilibili_cover_real_play.jpg)](https://www.bilibili.com/video/BV1PvxF66E8r)
 
 ### 仿真
 
-[![openpi π0 模型微调测试（仿真）](video/bilibili_cover.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
-
-点封面跳转 B 站：P1 π0 闭环推理（32 s）· P2 数采（21 s）。
-
-> GitHub 的 README 不支持内嵌播放器（`<iframe>` 会被过滤掉），所以用
-> "封面图 + 跳转"的方式。
+[![仿真演示](video/bilibili_cover_play.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
 
 ---
 
