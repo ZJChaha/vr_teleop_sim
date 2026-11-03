@@ -11,6 +11,18 @@
 
 ## 演示视频
 
+### 真机实验
+
+[![openpi π0 模型微调测试（真机实验）](video/bilibili_cover_real.jpg)](https://www.bilibili.com/video/BV1PvxF66E8r)
+
+点封面跳转 B 站（46 s）：用这套流程采集的数据微调 π0，**在真机上闭环推理** ——
+抓取桌面上的彩色方块。真实光照、线缆和桌面的磨损痕迹，和下面的仿真 demo 是同一套任务。
+
+> 本仓库只包含仿真侧代码。真机那一段用的是这里产出的 LeRobot 数据集，
+> 驱动与真机推理服务不在本仓库内。
+
+### 仿真
+
 [![openpi π0 模型微调测试（仿真）](video/bilibili_cover.jpg)](https://www.bilibili.com/video/BV1AEnw6hEEC)
 
 点封面跳转 B 站：P1 π0 闭环推理（32 s）· P2 数采（21 s）。
@@ -130,7 +142,7 @@ camview.py              相机预览窗口（独立线程 / 独立 GL 上下文�
 dataset_recorder.py     LeRobot v2.1 写入器
 runlog.py / glutil.py   运行日志 / GL 上下文串行化
 assets/                 参考场景 + Kinova Gen3 模型
-video/                  演示视频（H.264）+ B 站封面
+video/                  演示视频（H.264）+ B 站封面（仿真 / 真机）
 tools/                  check_profile / list_model / validate_e2e / validate_dual
 docs/                   01 上手 · 02 架构 · 03 接入自己的臂 · 04 相机
                         05 数采 · 06 排障 · 07 AI agent 交接 · 08 双臂
@@ -158,8 +170,8 @@ GPU: 任意支持 OpenGL 3.3 的显卡（实测 AMD RX 5500 XT）
 
 ## 已知限制
 
-* **只做仿真**。没有真机驱动；真机要自己接 Kortex / ROS / 自家 SDK，
-  但 profile 抽象和"位置指令 + 50Hz"的约定可以直接用。
+* **只做仿真**。没有真机驱动；真机要自己接 Kortex / ROS / 自家 SDK
+  （上面「真机实验」那段视频里的驱动就没开源），但 profile 抽象和"位置指令 + 50Hz"的约定可以直接用。
 * 参考实现的**桌面与方块写在 `assets/scene_grasp.xml` 里**，换机器人基本要重做场景。
 * 坐标映射默认值按 Quest 手柄调好，换头显/手柄要重标（[docs/03 §9](docs/03_PORT_YOUR_ROBOT.md)）。
 * 竖直朝下抓取在参考模型上有"夹得住抬不起"现象（根因未钉死，见 [docs/06](docs/06_TROUBLESHOOTING.md)）。
